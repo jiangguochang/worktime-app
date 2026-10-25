@@ -375,11 +375,15 @@
     // 导出与数据
     html += '<div class="section-title"><h2>导出与数据</h2><span>共 ' + count + ' 天</span></div>' +
       '<section class="card" style="padding:14px 16px">' +
-        '<button class="btn btn-primary" type="button" id="btnExportCsv">一键导出 Excel（CSV）</button>' +
+        '<button class="btn btn-primary" type="button" id="btnExportExcel">一键导出 Excel</button>' +
+        '<div style="height:10px"></div>' +
+        '<button class="btn btn-ghost" type="button" id="btnExportCsv">导出 CSV（旧格式）</button>' +
         '<div style="height:10px"></div>' +
         '<button class="btn btn-ghost" type="button" id="btnCopy">复制成表格，粘到微信或备忘录</button>' +
-        '<p class="legend-note" style="margin-top:12px">导出的文件用 Excel、WPS 或「数字」打开都是中文表头，不会乱码。' +
-          '在 iPhone 上导出后会进入「文件」App。</p>' +
+        '<p class="legend-note" style="margin-top:12px">' +
+          '点「一键导出 Excel」会弹出系统分享面板：可以直接转发到微信、邮件，' +
+          '也可以选「存储到文件」存成 .xlsx。' +
+        '</p>' +
       '</section>' +
       '<div class="section-title"><h2>备份</h2><span>防止数据丢失</span></div>' +
       '<section class="card" style="padding:14px 16px">' +
@@ -393,8 +397,10 @@
 
     view.innerHTML = html;
 
+    var b0 = $('btnExportExcel');
     var b1 = $('btnExportCsv');
     var b2 = $('btnCopy');
+    if (b0) b0.addEventListener('click', exportExcel);
     if (b1) b1.addEventListener('click', exportCsv);
     if (b2) b2.addEventListener('click', copyTable);
     var b3 = $('btnBackup');
@@ -405,7 +411,230 @@
     if (fi) fi.addEventListener('change', importBackup);
   }
 
-  /* ---------------- 导入导出 ---------------- */
+  /* ---------------- 导出：真正的 .xlsx ---------------- */
+
+  // 零依赖生成最小可用的 xlsx（zip + SpreadsheetML）
+  var CRC_TABLE = (function () {
+    var t = new Uint32Array(256);
+    for (var i = 0; i < 256; i++) {
+      var c = i;
+      for (var k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      t[i] = c >>> 0;
+    }
+    return t;
+  })();
+
+  function crc32(bytes) {
+    var c = 0xFFFFFFFF;
+    for (var i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+    return (c ^ 0xFFFFFFFF) >>> 0;
+  }
+
+  function zipStore(files) {
+    var enc = new TextEncoder();
+    var chunks = [], central = [], offset = 0;
+
+    files.forEach(function (f) {
+      var nameBytes = enc.encode(f.name);
+      var dataBytes = typeof f.data === 'string' ? enc.encode(f.data) : f.data;
+      var crc = crc32(dataBytes);
+
+      var local = new Uint8Array(30 + nameBytes.length);
+      var dv = new DataView(local.buffer);
+      dv.setUint32(0, 0x04034b50, true);
+      dv.setUint16(4, 20, true);
+      dv.setUint16(6, 0x0800, true);
+      dv.setUint16(8, 0, true);
+      dv.setUint16(10, 0, true);
+      dv.setUint16(12, 0, true);
+      dv.setUint32(14, crc, true);
+      dv.setUint32(18, dataBytes.length, true);
+      dv.setUint32(22, dataBytes.length, true);
+      dv.setUint16(26, nameBytes.length, true);
+      dv.setUint16(28, 0, true);
+      local.set(nameBytes, 30);
+      chunks.push(local, dataBytes);
+
+      var cen = new Uint8Array(46 + nameBytes.length);
+      var cdv = new DataView(cen.buffer);
+      cdv.setUint32(0, 0x02014b50, true);
+      cdv.setUint16(4, 20, true);
+      cdv.setUint16(6, 20, true);
+      cdv.setUint16(8, 0x0800, true);
+      cdv.setUint16(10, 0, true);
+      cdv.setUint16(12, 0, true);
+      cdv.setUint16(14, 0, true);
+      cdv.setUint32(16, crc, true);
+      cdv.setUint32(20, dataBytes.length, true);
+      cdv.setUint32(24, dataBytes.length, true);
+      cdv.setUint16(28, nameBytes.length, true);
+      cdv.setUint32(42, offset, true);
+      cen.set(nameBytes, 46);
+      central.push(cen);
+
+      offset += local.length + dataBytes.length;
+    });
+
+    var cenSize = central.reduce(function (n, c) { return n + c.length; }, 0);
+    var end = new Uint8Array(22);
+    var edv = new DataView(end.buffer);
+    edv.setUint32(0, 0x06054b50, true);
+    edv.setUint16(8, files.length, true);
+    edv.setUint16(10, files.length, true);
+    edv.setUint32(12, cenSize, true);
+    edv.setUint32(16, offset, true);
+
+    var out = new Uint8Array(offset + cenSize + 22);
+    var p = 0;
+    chunks.forEach(function (c) { out.set(c, p); p += c.length; });
+    central.forEach(function (c) { out.set(c, p); p += c.length; });
+    out.set(end, p);
+    return out;
+  }
+
+  function xmlEsc(s) {
+    return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function colName(i) {
+    var s = '';
+    i += 1;
+    while (i > 0) { var m = (i - 1) % 26; s = String.fromCharCode(65 + m) + s; i = Math.floor((i - 1) / 26); }
+    return s;
+  }
+
+  function sheetXml(rows) {
+    var body = rows.map(function (row, ri) {
+      var cells = row.map(function (v, ci) {
+        var ref = colName(ci) + (ri + 1);
+        if (v === '' || v === null || v === undefined) return '';
+        var isNum = typeof v === 'number' || (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v));
+        if (isNum) return '<c r="' + ref + '"><v>' + v + '</v></c>';
+        return '<c r="' + ref + '" t="inlineStr"><is><t xml:space="preserve">' + xmlEsc(v) + '</t></is></c>';
+      }).join('');
+      return '<row r="' + (ri + 1) + '">' + cells + '</row>';
+    }).join('');
+    return '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+      '<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData>' + body + '</sheetData></worksheet>';
+  }
+
+  function buildXlsx(rows) {
+    var CT = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+    var files = [
+      { name: '[Content_Types].xml', data: CT +
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>' +
+        '<Default Extension="xml" ContentType="application/xml"/>' +
+        '<Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>' +
+        '<Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>' +
+        '</Types>' },
+      { name: '_rels/.rels', data: CT +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>' +
+        '</Relationships>' },
+      { name: 'xl/workbook.xml', data: CT +
+        '<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">' +
+        '<sheets><sheet name="工时记录" sheetId="1" r:id="rId1"/></sheets></workbook>' },
+      { name: 'xl/_rels/workbook.xml.rels', data: CT +
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">' +
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>' +
+        '</Relationships>' },
+      { name: 'xl/worksheets/sheet1.xml', data: sheetXml(rows) }
+    ];
+    return zipStore(files);
+  }
+
+  function buildSheetRows() {
+    var rows = [HEADERS.slice()];
+    var list = sortedDays().slice().reverse(); // 从早到晚
+    list.forEach(function (d) {
+      var amOvernight = segOvernight(d.am);
+      var pmOvernight = segOvernight(d.pm);
+      rows.push([
+        d.date,
+        weekdayName(d.date),
+        d.am ? d.am.start : '',
+        d.am ? d.am.end : '',
+        d.am ? Number(decimalHours(segMinutes(d.am))) : '',
+        d.pm ? d.pm.start : '',
+        d.pm ? d.pm.end : '',
+        d.pm ? Number(decimalHours(segMinutes(d.pm))) : '',
+        Number(decimalHours(dayMinutes(d))),
+        (amOvernight || pmOvernight) ? '是' : '否',
+        d.note || ''
+      ]);
+    });
+
+    var amTotal = days.reduce(function (n, d) { return n + segMinutes(d.am); }, 0);
+    var pmTotal = days.reduce(function (n, d) { return n + segMinutes(d.pm); }, 0);
+    var total = sumMinutes(days);
+    rows.push(['合计', list.length + ' 天', '', '', Number(decimalHours(amTotal)),
+      '', '', Number(decimalHours(pmTotal)), Number(decimalHours(total)), '', '']);
+    return rows;
+  }
+
+  /* ---------------- 导出入口：分享 / 下载 ---------------- */
+
+  function makeXlsxFile() {
+    var bytes = buildXlsx(buildSheetRows());
+    var name = '工时记录_' + todayStr() + '.xlsx';
+    return new File([bytes], name, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    });
+  }
+
+  // 支持系统分享面板时优先分享（可直接转发到微信/邮件）
+  function exportExcel() {
+    if (!days.length) { toast('还没有记录可以导出'); return; }
+
+    var file;
+    try {
+      file = makeXlsxFile();
+    } catch (e) {
+      toast('生成表格失败，换用 CSV');
+      exportCsv();
+      return;
+    }
+
+    var canShareFiles = false;
+    try {
+      canShareFiles = !!(navigator.canShare && navigator.share && navigator.canShare({ files: [file] }));
+    } catch (e) {
+      canShareFiles = false;
+    }
+
+    if (canShareFiles) {
+      navigator.share({
+        files: [file],
+        title: '工时记录',
+        text: '工时记录 ' + todayStr()
+      }).then(function () {
+        toast('已发送');
+      }).catch(function (err) {
+        if (err && err.name === 'AbortError') return; // 用户取消，不提示
+        downloadFile(file);
+        toast('已将表格存到「文件」');
+      });
+      return;
+    }
+
+    // 不支持分享：直接下载（iPhone 会进「文件」，电脑进下载目录）
+    downloadFile(file);
+    toast('已导出 ' + days.length + ' 天');
+  }
+
+  function downloadFile(file) {
+    var url = URL.createObjectURL(file);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 6000);
+  }
+
+  /* ---------------- 导入导出（CSV 保留） ---------------- */
 
   var HEADERS = ['日期', '星期', '上午上班', '上午下班', '上午工时', '下午上班', '下午下班', '下午工时', '全天工时', '是否跨天', '备注'];
 
@@ -746,7 +975,7 @@
   });
 
   $('btnAdd').addEventListener('click', function () { openSheet(null); });
-  $('btnExportTop').addEventListener('click', exportCsv);
+  $('btnExportTop').addEventListener('click', exportExcel);
 
   /* ---------------- 启动 ---------------- */
 
