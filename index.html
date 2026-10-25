@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>工时记录</title>
+<meta name="theme-color" content="#ffffff">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="工时">
+<meta name="format-detection" content="telephone=no">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" href="icons/favicon.png">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<div class="app">
+  <header class="topbar">
+    <div class="topbar-text">
+      <h1>工时记录</h1>
+      <p id="topbarSub">手动记下几点上班、几点下班</p>
+    </div>
+    <button class="icon-btn" id="btnExportTop" type="button" aria-label="导出">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M12 15V4m0 0L8 8m4-4 4 4" />
+        <path d="M4 15v3.5A1.5 1.5 0 0 0 5.5 20h13a1.5 1.5 0 0 0 1.5-1.5V15" />
+      </svg>
+    </button>
+  </header>
+
+  <main class="view" id="view"></main>
+
+  <button class="fab" id="btnAdd" type="button" aria-label="记一笔工时">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+  </button>
+
+  <nav class="tabbar" id="tabbar">
+    <button class="tab is-active" type="button" data-view="list">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M4 6.5h16M4 12h16M4 17.5h10" />
+      </svg>
+      <span>记录</span>
+    </button>
+    <button class="tab" type="button" data-view="stats">
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path d="M6 19v-5m6 5V7m6 12v-8" />
+      </svg>
+      <span>统计</span>
+    </button>
+  </nav>
+</div>
+
+<!-- 录入面板 -->
+<div class="sheet-mask" id="sheetMask" hidden></div>
+<section class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheetTitle" hidden>
+  <div class="sheet-grip"></div>
+  <div class="sheet-head">
+    <h2 id="sheetTitle">记一笔工时</h2>
+    <button class="sheet-close" type="button" id="sheetClose" aria-label="关闭">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18" /></svg>
+    </button>
+  </div>
+
+  <form class="sheet-body" id="entryForm" novalidate>
+    <div class="field">
+      <label for="fDate">日期</label>
+      <input id="fDate" name="date" type="date" required>
+    </div>
+
+    <div class="half">
+      <div class="half-head">
+        <span class="half-tag">上午</span>
+        <span class="half-sum" id="sumAm">未填</span>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="fAmStart">上班时间</label>
+          <input id="fAmStart" type="time">
+        </div>
+        <div class="field">
+          <label for="fAmEnd">下班时间</label>
+          <input id="fAmEnd" type="time">
+        </div>
+      </div>
+    </div>
+
+    <div class="half">
+      <div class="half-head">
+        <span class="half-tag">下午</span>
+        <span class="half-sum" id="sumPm">未填</span>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="fPmStart">上班时间</label>
+          <input id="fPmStart" type="time">
+        </div>
+        <div class="field">
+          <label for="fPmEnd">下班时间</label>
+          <input id="fPmEnd" type="time">
+        </div>
+      </div>
+    </div>
+
+    <div class="preview" id="preview">
+      <span class="preview-label">全天合计</span>
+      <span class="preview-value" id="previewValue">—</span>
+    </div>
+    <p class="preview-hint" id="previewHint" hidden></p>
+
+    <div class="field">
+      <label for="fNote">备注<span class="optional">选填</span></label>
+      <input id="fNote" name="note" type="text" maxlength="40" placeholder="比如：加班整理报表">
+    </div>
+
+    <div class="sheet-actions">
+      <button class="btn btn-primary" type="submit" id="btnSave">保存</button>
+      <button class="btn btn-ghost btn-danger" type="button" id="btnDelete" hidden>删除这一天</button>
+    </div>
+  </form>
+</section>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
